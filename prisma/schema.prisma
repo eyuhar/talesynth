@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User table - ID must match Supabase auth.users.id
+model User {
+  id         String      @id @db.Uuid // Must be UUID for Supabase Auth
+  email      String?     @unique
+  createdAt  DateTime    @default(now()) @map("created_at")
+  updatedAt  DateTime    @updatedAt @map("updated_at")
+  characters Character[]
+
+  @@map("users")
+}
+
+// Character - deleted when User is deleted
+model Character {
+  id         String      @id @default(uuid()) @db.Uuid
+  name       String
+  stats      Json?
+  storyState StoryState? 
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String      @map("user_id") @db.Uuid
+  createdAt  DateTime    @default(now()) @map("created_at")
+  updatedAt  DateTime    @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("characters")
+}
+
+// StoryState - deleted when Character is deleted
+model StoryState {
+  id           String    @id @default(uuid()) @db.Uuid
+  character    Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  characterId  String    @unique @map("character_id") @db.Uuid
+  progress     Json?
+  lastResponse String?   @map("last_response") @db.Text
+  summary      String?   @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("story_states")
+}
