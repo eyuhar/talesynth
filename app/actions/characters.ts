@@ -86,7 +86,7 @@ export async function createCharacter(formData: FormData) {
       },
     });
 
-    revalidatePath("/dashboard");
+    revalidatePath("/lobby");
     return { success: true, character };
   } catch (error) {
     console.error("Error creating character:", error);
@@ -107,7 +107,7 @@ export async function deleteCharacter(characterId: string) {
       },
     });
 
-    revalidatePath("/dashboard");
+    revalidatePath("/lobby");
     return { success: true };
   } catch (error) {
     console.error("Error deleting character:", error);
