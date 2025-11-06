@@ -31,7 +31,7 @@ export async function updateSession(request: NextRequest) {
 
   // Optional: can check protected routes here
   // if (!user && request.nextUrl.pathname.startsWith('/game')) {
-  //   return NextResponse.redirect(new URL('/login', request.url))
+  //   return NextResponse.redirect(new URL('/auth', request.url))
   // }
 
   return supabaseResponse;
