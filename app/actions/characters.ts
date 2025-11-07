@@ -83,6 +83,9 @@ export async function createCharacter(formData: FormData) {
       data: {
         name: name.trim(),
         userId: user.id,
+        stats: {
+          hp: 100,
+        },
       },
     });
 

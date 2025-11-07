@@ -1,6 +1,7 @@
 import { requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
+import ClientStoryUI from "./ClientStoryUI";
 
 export default async function GamePage({
   params,
@@ -25,7 +26,7 @@ export default async function GamePage({
   return (
     <div className="p-8">
       <h1 className="text-3xl font-bold">{character.name}</h1>
-      <p>Story startet hier...</p>
+      <ClientStoryUI characterId={character.id} />
     </div>
   );
 }

@@ -39,8 +39,8 @@ model StoryState {
   character    Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
   characterId  String    @unique @map("character_id") @db.Uuid
   progress     Json?
-  lastResponse String?   @map("last_response") @db.Text
-  summary      String?   @db.Text
+  lastResponse Json?   @map("last_response")
+  summary      Json?
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
