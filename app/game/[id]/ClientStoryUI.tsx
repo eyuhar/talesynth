@@ -16,26 +16,26 @@ export default function ClientStoryUI({
   const [lr, setLr] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  async function refresh() {
+  async function refresh(lastResponse?: any) {
+    if (lastResponse) {
+      setLr(lastResponse);
+      return;
+    }
     const r = await getLastResponse(characterId);
     setLr(r.lastResponse);
   }
 
   async function handleStart() {
     setLoading(true);
-    console.log("before");
     await startStory(characterId);
-    console.log("after");
     await refresh();
     setLoading(false);
   }
 
   async function handleChoice(choice: string) {
     setLoading(true);
-    console.log(`before ${characterId}`);
     const res = await continueStory(characterId, choice);
-    console.log(res);
-    await refresh();
+    await refresh(res.lastResponse);
     setLoading(false);
   }
 

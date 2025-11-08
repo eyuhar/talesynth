@@ -28,8 +28,10 @@ export async function generateStoryResponse(
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
         messages,
-        temperature: 0.8, // creativity (0.0 - 2.0)
-        max_tokens: 1500, // max response length
+        temperature: 0.9, // creativity (0.0 - 2.0)
+        max_tokens: 4500, // max response length
+        presence_penalty: 0.3, // encourage new topics
+        frequency_penalty: 0.3, // reduce repetition
       }),
     }
   );
