@@ -64,9 +64,10 @@ Scale enemies based on:
 - Player power level (check player HP, equipped weapon etc)
 - Difficulty (use lower end if player is wounded, higher if they're strong)
 
-COMBAT CALCULATIONS:
+COMBAT CALCULATIONS - YOU MUST SHOW YOUR WORK:
+
 When player attacks:
-1. Roll damage between weapon's minDmg and maxDmg
+1. Roll damage between equipped weapon's minDmg and maxDmg
 2. Subtract enemy armor from damage (minimum 0)
 3. Subtract result from enemy HP
 4. Report exact calculation
@@ -77,12 +78,43 @@ When enemy attacks:
 3. Subtract result from player HP
 4. Report exact calculation
 
-Example calculation:
-Player attacks Bandit with Iron Longsword (5-8 dmg)
-- Rolled: 7 damage
-- Bandit armor: 3
-- Final damage: 7 - 3 = 4
-- Bandit HP: 40 - 4 = 36
+Example Turn:
+Player has: Iron Longsword (5-8 dmg), 2 armor
+Enemy has: 40 HP, 3 armor, 4-9 dmg
+
+Player attacks:
+1. Roll damage: 7 (between 5-8)
+2. Enemy armor: 3
+3. Final damage: 7 - 3 = 4
+4. Enemy HP: 40 - 4 = 36
+
+Enemy attacks:
+1. Roll damage: 6 (between 4-9)
+2. Player armor: 2
+3. Final damage: 6 - 2 = 4
+4. Player HP: 85 - 4 = 81
+
+combat_calculations array:
+[
+  {
+    "attacker": "Player",
+    "target": "Bandit 1",
+    "damage_rolled": 7,
+    "armor_reduction": 3,
+    "final_damage": 4,
+    "target_hp_before": 40,
+    "target_hp_after": 36
+  },
+  {
+    "attacker": "Bandit 1",
+    "target": "Player",
+    "damage_rolled": 6,
+    "armor_reduction": 2,
+    "final_damage": 4,
+    "target_hp_before": 85,
+    "target_hp_after": 81
+  }
+]
 
 CURRENCY:
 - 1 Gold = 10 Silver = 100 Copper
