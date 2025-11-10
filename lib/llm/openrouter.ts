@@ -1,35 +1,51 @@
-// load environment variables from .env file
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL;
+import {
+  buildSystemPrompt,
+  buildCharacterContext,
+  buildCombatContext,
+} from "@/lib/prompts/context-builder";
 
-if (!OPENROUTER_API_KEY) {
-  throw new Error("OPENROUTER_API_KEY is not set");
-}
-
-export interface Message {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-// Function to generate story response using OpenRouter API
 export async function generateStoryResponse(
-  messages: Message[]
+  characterData: any,
+  inventoryData: any[],
+  skillsData: any[],
+  userInput: string,
+  combatData?: any
 ): Promise<string> {
+  const systemPrompt = buildSystemPrompt();
+  const characterContext = buildCharacterContext(
+    characterData,
+    inventoryData,
+    skillsData
+  );
+  const combatContext = buildCombatContext(combatData);
+
+  const userMessage = {
+    character: characterContext.character,
+    inventory: characterContext.inventory,
+    skills: characterContext.skills,
+    ...(combatContext && { combat: combatContext }),
+    action: userInput,
+  };
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: JSON.stringify(userMessage, null, 2) },
+  ];
+
   const response = await fetch(
     "https://openrouter.ai/api/v1/chat/completions",
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
-        //        "HTTP-Referer": "http://localhost:3000",
         "X-Title": "TaleSynth",
       },
       body: JSON.stringify({
-        model: OPENROUTER_MODEL,
+        model: process.env.OPENROUTER_MODEL,
         messages,
-        temperature: 0.6, // creativity (0.0 - 2.0)
-        max_tokens: 4500, // max response length
+        temperature: 0.6, // creativity
+        max_tokens: 4500,
         presence_penalty: 0.3, // encourage new topics
         frequency_penalty: 0.3, // reduce repetition
       }),
@@ -42,6 +58,5 @@ export async function generateStoryResponse(
   }
 
   const data = await response.json();
-  console.log("OpenRouter API response data:", data);
   return data.choices[0].message.content;
 }
