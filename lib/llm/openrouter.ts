@@ -28,7 +28,7 @@ export async function generateStoryResponse(
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
         messages,
-        temperature: 0.9, // creativity (0.0 - 2.0)
+        temperature: 0.6, // creativity (0.0 - 2.0)
         max_tokens: 4500, // max response length
         presence_penalty: 0.3, // encourage new topics
         frequency_penalty: 0.3, // reduce repetition
@@ -42,5 +42,6 @@ export async function generateStoryResponse(
   }
 
   const data = await response.json();
+  console.log("OpenRouter API response data:", data);
   return data.choices[0].message.content;
 }

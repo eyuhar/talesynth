@@ -11,38 +11,104 @@ datasource db {
 model User {
   id         String      @id @db.Uuid // Must be UUID for Supabase Auth
   email      String?     @unique
+  stories    Story[]
   createdAt  DateTime    @default(now()) @map("created_at")
   updatedAt  DateTime    @updatedAt @map("updated_at")
-  characters Character[]
 
   @@map("users")
 }
 
-// Character - deleted when User is deleted
-model Character {
-  id         String      @id @default(uuid()) @db.Uuid
-  name       String
-  stats      Json?
-  storyState StoryState? 
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String      @map("user_id") @db.Uuid
-  createdAt  DateTime    @default(now()) @map("created_at")
-  updatedAt  DateTime    @updatedAt @map("updated_at")
-
-  @@index([userId])
-  @@map("characters")
-}
-
-// StoryState - deleted when Character is deleted
-model StoryState {
+model Story {
   id           String    @id @default(uuid()) @db.Uuid
+  name         String
+  progress     Json?     
+  lastResponse Json?     
+  summary      Json?     
+  
   character    Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
   characterId  String    @unique @map("character_id") @db.Uuid
-  progress     Json?
-  lastResponse Json?   @map("last_response")
-  summary      Json?
+  
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String    @map("user_id") @db.Uuid
+  
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  @@map("story_states")
+  @@index([userId])
+  @@map("stories")
+}
+
+model Character {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  gender       String  // "male", "female", "other"
+  
+  currentStats Json     // {hp: 85, maxHp: 100}
+  
+  // Currency (SmallInt: -32,768 bis +32,767)
+  goldCoins    Int      @default(0) @db.SmallInt
+  silverCoins  Int      @default(0) @db.SmallInt
+  copperCoins  Int      @default(0) @db.SmallInt
+  
+  // relations
+  story        Story?   // 1:1 relation
+  items        CharacterItem[]
+  skills       CharacterSkill[]
+  
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("characters")
+}
+
+model CharacterItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  characterId String   @map("character_id") @db.Uuid
+  
+  // Item Details
+  type        String   // "weapon_1h_sword", "armor_chest", "consumable_potion", etc.
+  name        String   // "Worn Longsword", "Lesser Healing Potion"
+  description String?  // Optional description
+  
+  // Stats (flexible, dependant on type)
+  // examples:
+  // Weapon: {minDmg: 5, maxDmg: 8, weight: 2800, value: 35}
+  // Armor: {armor: 5, weight: 5000, value: 100}
+  // Consumable: {healing: 25, weight: 150, value: 12}
+  stats       Json
+  
+  quantity    Int      @default(1) @db.SmallInt
+  equipped    Boolean  @default(false)
+  
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([characterId])
+  @@index([type])
+  @@map("character_items")
+}
+
+model CharacterSkill {
+  id          String   @id @default(uuid()) @db.Uuid
+  characterId String   @map("character_id") @db.Uuid
+  
+  // Skill Details
+  skillId     String   @map("skill_id") // "1h_sword", "diplomacy", "ancient_fire_magic"
+  name        String   // "One-Handed Swords", "Ancient Fire Magic"
+  description String?  // Optional description
+  
+  // Progress
+  level       Int      @default(1) @db.SmallInt
+  xp          Int      @default(0) @db.SmallInt
+  
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@unique([characterId, skillId]) // A character can only have each skill once
+  @@index([characterId])
+  @@map("character_skills")
 }
