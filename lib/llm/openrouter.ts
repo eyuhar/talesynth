@@ -1,35 +1,33 @@
-import {
-  buildSystemPrompt,
-  buildCharacterContext,
-  buildCombatContext,
-} from "@/lib/prompts/context-builder";
+// OpenRouter API integration with context building
 
-export async function generateStoryResponse(
-  characterData: any,
-  inventoryData: any[],
-  skillsData: any[],
-  userInput: string,
-  combatData?: any
-): Promise<string> {
+import { buildSystemPrompt } from "../prompts/context-builder";
+
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL;
+
+if (!OPENROUTER_API_KEY) {
+  throw new Error("OPENROUTER_API_KEY is not set");
+}
+
+export interface Message {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+/**
+ * Generates story response using OpenRouter API
+ * @param context - Full game context (character, inventory, skills, combat, etc.)
+ */
+export async function generateStoryResponse(context: any): Promise<string> {
+  // Build system prompt
   const systemPrompt = buildSystemPrompt();
-  const characterContext = buildCharacterContext(
-    characterData,
-    inventoryData,
-    skillsData
-  );
-  const combatContext = buildCombatContext(combatData);
 
-  const userMessage = {
-    character: characterContext.character,
-    inventory: characterContext.inventory,
-    skills: characterContext.skills,
-    ...(combatContext && { combat: combatContext }),
-    action: userInput,
-  };
+  // Build user message with all context
+  const userMessage = JSON.stringify(context, null, 2);
 
-  const messages = [
+  const messages: Message[] = [
     { role: "system", content: systemPrompt },
-    { role: "user", content: JSON.stringify(userMessage, null, 2) },
+    { role: "user", content: userMessage },
   ];
 
   const response = await fetch(
@@ -37,15 +35,15 @@ export async function generateStoryResponse(
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
         "X-Title": "TaleSynth",
       },
       body: JSON.stringify({
-        model: process.env.OPENROUTER_MODEL,
+        model: OPENROUTER_MODEL,
         messages,
-        temperature: 0.6, // creativity
-        max_tokens: 4500,
+        temperature: 0.6, // creativity (0.0 - 2.0)
+        max_tokens: 4500, // max response length
         presence_penalty: 0.3, // encourage new topics
         frequency_penalty: 0.3, // reduce repetition
       }),
@@ -58,5 +56,6 @@ export async function generateStoryResponse(
   }
 
   const data = await response.json();
+
   return data.choices[0].message.content;
 }

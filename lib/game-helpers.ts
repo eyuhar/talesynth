@@ -10,7 +10,7 @@ export interface GeneratedItem {
   name: string;
   description?: string;
   stats: Record<string, number>;
-  quantity?: number;
+  quantity: number;
 }
 
 /**

@@ -1,210 +1,453 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { revalidatePath } from "next/cache";
 import { requireAuth } from "@/lib/auth";
 import { generateStoryResponse } from "@/lib/llm/openrouter";
-import type { Message } from "@/lib/llm/openrouter";
-import systemPrompt from "@/lib/llm/systemPrompt";
+import {
+  createCharacterWithLoadout,
+  getInitialStoryPrompt,
+} from "@/lib/game-setup";
+import {
+  validateItem,
+  validateStats,
+  validateCurrency,
+  updateMultipleSkills,
+  softValidateEnemies,
+} from "@/lib/game-helpers";
 
-// Types for StoryRecord and Progress
-export type StoryRecord = {
+// TYPES
+
+export interface AIResponse {
   story_text: string;
-  choices: string[];
-  stats: { [key: string]: any };
-  user_input: string | null;
-};
-
-export type Progress = {
-  entries: StoryRecord[];
-};
-
-// Get last N entries from progress for context to LLM
-function getRecentEntries(progress: Progress, n: number): StoryRecord[] {
-  return progress.entries.slice(-n);
+  choices: Array<{ id: string; text: string }>;
+  stats_changes?: { hp?: number };
+  inventory_changes?: Array<{
+    type: string;
+    name: string;
+    description?: string;
+    stats: Record<string, number>;
+    quantity: number;
+  }>;
+  currency_changes?: { gold?: number; silver?: number; copper?: number };
+  skills_used?: Array<{ skillId: string; usage_count: number }>;
+  enemies?: Array<{
+    name: string;
+    hp: number;
+    maxHp: number;
+    armor: number;
+    minDmg: number;
+    maxDmg: number;
+  }>;
 }
 
-// Get only last response (for quick display)
-export async function getLastResponse(characterId: string) {
+export interface ProgressEntry {
+  story_text: string;
+  choices: Array<{ id: string; text: string }>;
+  stats_changes?: any;
+  inventory_changes?: any[];
+  currency_changes?: any;
+  skills_used?: any[];
+  combat_started?: boolean;
+  enemies?: any[];
+  user_input?: string;
+}
+
+// START STORY
+
+export async function startStory(
+  characterName: string,
+  gender: string
+): Promise<{ success: boolean; storyId?: string; error?: string }> {
   const user = await requireAuth();
 
   try {
-    // Only load lastResponse field
-    const storyState = await prisma.storyState.findUnique({
-      where: {
-        characterId,
-        // Ensure ownership
-        character: {
-          userId: user.id,
+    // Create character with starter loadout
+    const character = await createCharacterWithLoadout(
+      user.id,
+      characterName,
+      gender
+    );
+
+    // Load character data for context
+    const characterWithData = await prisma.character.findUnique({
+      where: { id: character.id },
+      include: {
+        items: true,
+        skills: true,
+      },
+    });
+
+    if (!characterWithData) {
+      return { success: false, error: "Character creation failed" };
+    }
+
+    // Build context for AI
+    const initialPrompt = getInitialStoryPrompt(characterName, gender);
+
+    const context = {
+      character: {
+        name: characterWithData.name,
+        gender: characterWithData.gender,
+        current_stats: characterWithData.currentStats,
+        currency: {
+          gold: characterWithData.goldCoins,
+          silver: characterWithData.silverCoins,
+          copper: characterWithData.copperCoins,
         },
+      },
+      inventory: characterWithData.items.map((item) => ({
+        type: item.type,
+        name: item.name,
+        stats: item.stats,
+        quantity: item.quantity,
+        equipped: item.equipped,
+      })),
+      skills: characterWithData.skills.map((skill) => ({
+        skillId: skill.skillId,
+        name: skill.name,
+        level: skill.level,
+      })),
+      initial_prompt: initialPrompt,
+    };
+
+    // Call AI
+    const aiResponseText = await generateStoryResponse(context);
+
+    // Parse AI response
+    let aiResponse: AIResponse;
+    try {
+      aiResponse = JSON.parse(aiResponseText);
+    } catch (err) {
+      console.error("Failed to parse AI response:", err);
+      return { success: false, error: "AI response parsing failed" };
+    }
+
+    // Validate AI response (soft validation)
+    const validatedResponse = validateAIResponse(
+      aiResponse,
+      characterWithData.currentStats as any
+    );
+
+    // Create Story with initial progress
+    const story = await prisma.story.create({
+      data: {
+        name: `${characterName}'s Adventure`,
+        userId: user.id,
+        characterId: character.id,
+        lastResponse: validatedResponse as any,
+        progress: {
+          entries: [validatedResponse],
+        } as any,
+      },
+    });
+
+    return { success: true, storyId: story.id };
+  } catch (error) {
+    console.error("Error starting story:", error);
+    return { success: false, error: "Failed to start story" };
+  }
+}
+
+// CONTINUE STORY
+
+export async function continueStory(
+  storyId: string,
+  userInput: string
+): Promise<{ success: boolean; lastResponse?: any; error?: string }> {
+  const user = await requireAuth();
+
+  try {
+    // Load story with character data
+    const story = await prisma.story.findFirst({
+      where: {
+        id: storyId,
+        userId: user.id,
+      },
+      include: {
+        character: {
+          include: {
+            items: true,
+            skills: true,
+          },
+        },
+      },
+    });
+
+    if (!story) {
+      return { success: false, error: "Story not found" };
+    }
+
+    const character = story.character;
+    const progress = story.progress as any;
+    const lastResponse = story.lastResponse as any;
+
+    // Add user input to last response and push to progress
+    const entryWithUserInput = {
+      ...lastResponse,
+      user_input: userInput,
+    };
+
+    const updatedProgress = {
+      entries: [...(progress.entries || []), entryWithUserInput],
+    };
+
+    // Check if in combat (lastResponse has enemies array)
+    const inCombat =
+      lastResponse.enemies &&
+      Array.isArray(lastResponse.enemies) &&
+      lastResponse.enemies.length > 0;
+
+    // Build context for AI
+    const context = {
+      character: {
+        name: character.name,
+        gender: character.gender,
+        current_stats: character.currentStats,
+        currency: {
+          gold: character.goldCoins,
+          silver: character.silverCoins,
+          copper: character.copperCoins,
+        },
+      },
+      inventory: character.items.map((item) => ({
+        type: item.type,
+        name: item.name,
+        stats: item.stats,
+        quantity: item.quantity,
+        equipped: item.equipped,
+      })),
+      skills: character.skills.map((skill) => ({
+        skillId: skill.skillId,
+        name: skill.name,
+        level: skill.level,
+      })),
+      // Include combat state if in combat
+      ...(inCombat && {
+        combat: {
+          active: true,
+          enemies: lastResponse.enemies,
+        },
+      }),
+      // Recent history for context (last 3 entries)
+      recent_history: updatedProgress.entries.slice(-3),
+      current_action: userInput,
+    };
+
+    // Call AI
+    const aiResponseText = await generateStoryResponse(context);
+
+    // Parse AI response
+    let aiResponse: AIResponse;
+    try {
+      aiResponse = JSON.parse(aiResponseText);
+    } catch (err) {
+      console.error("Failed to parse AI response:", err);
+      return { success: false, error: "AI response parsing failed" };
+    }
+
+    // Validate AI response
+    const validatedResponse = validateAIResponse(
+      aiResponse,
+      character.currentStats as any
+    );
+
+    // Process game state changes
+    await processGameStateChanges(
+      character.id,
+      validatedResponse,
+      character.currentStats as any,
+      character.goldCoins,
+      character.silverCoins,
+      character.copperCoins
+    );
+
+    // Update story with new progress and lastResponse
+    await prisma.story.update({
+      where: { id: storyId },
+      data: {
+        lastResponse: validatedResponse as any,
+        progress: {
+          entries: [...updatedProgress.entries, validatedResponse],
+        } as any,
+      },
+    });
+
+    return { success: true, lastResponse: validatedResponse };
+  } catch (error) {
+    console.error("Error continuing story:", error);
+    return { success: false, error: "Failed to continue story" };
+  }
+}
+
+// GET LAST RESPONSE (for UI)
+
+export async function getLastResponse(storyId: string) {
+  const user = await requireAuth();
+
+  try {
+    const story = await prisma.story.findFirst({
+      where: {
+        id: storyId,
+        userId: user.id,
       },
       select: {
         lastResponse: true,
       },
     });
 
-    return { success: true, lastResponse: storyState?.lastResponse };
+    if (!story) {
+      return { success: false, error: "Story not found" };
+    }
+
+    return { success: true, lastResponse: story.lastResponse };
   } catch (error) {
     console.error("Error fetching last response:", error);
-    return { error: "Failed to fetch last response" };
+    return { success: false, error: "Failed to fetch last response" };
   }
 }
 
-// Get full story state (when needed)
-export async function getFullStoryState(characterId: string) {
-  const user = await requireAuth();
+// HELPER FUNCTIONS
 
-  try {
-    // Load all story data when explicitly needed
-    const storyState = await prisma.storyState.findUnique({
-      where: {
-        characterId,
-        // Ensure ownership
-        character: {
-          userId: user.id,
-        },
-      },
-    });
+/**
+ * Validates AI response and corrects critical errors
+ */
+function validateAIResponse(
+  response: AIResponse,
+  currentStats: any
+): AIResponse {
+  const validated = { ...response };
 
-    return { success: true, storyState };
-  } catch (error) {
-    console.error("Error fetching story state:", error);
-    return { error: "Failed to fetch story state" };
+  // Validate stats if present
+  if (validated.stats_changes) {
+    const newStats = {
+      ...currentStats,
+      hp: (currentStats.hp || 0) + (validated.stats_changes.hp || 0),
+    };
+    const validatedStats = validateStats(newStats);
+
+    // Recalculate stats_changes based on validated values
+    validated.stats_changes = {
+      hp: validatedStats.hp - currentStats.hp,
+    };
   }
+
+  // Validate items if present
+  if (validated.inventory_changes && validated.inventory_changes.length > 0) {
+    validated.inventory_changes = validated.inventory_changes.map((item) =>
+      validateItem(item)
+    );
+  }
+
+  // Validate currency if present
+  if (validated.currency_changes) {
+    validated.currency_changes = validateCurrency(validated.currency_changes);
+  }
+
+  // Validate enemies if present
+  if (validated.enemies && validated.enemies.length > 0) {
+    const { correctedEnemies } = softValidateEnemies(validated.enemies);
+    validated.enemies = correctedEnemies.filter((e) => e.hp > 0);
+  }
+
+  return validated;
 }
 
-// Start new story
-export async function startStory(characterId: string) {
-  const user = await requireAuth();
+/**
+ * Processes game state changes (stats, inventory, currency, skills)
+ */
+async function processGameStateChanges(
+  characterId: string,
+  response: AIResponse,
+  currentStats: any,
+  currentGold: number,
+  currentSilver: number,
+  currentCopper: number
+) {
+  // Update character stats
+  if (response.stats_changes) {
+    const newStats = {
+      ...currentStats,
+      hp: (currentStats.hp || 0) + (response.stats_changes.hp || 0),
+    };
+    const validatedStats = validateStats(newStats);
 
-  // verify ownership
-  const character = await prisma.character.findFirst({
-    where: { id: characterId, userId: user.id },
-  });
-  if (!character) return { error: "Character not found" };
-
-  // Prepare initial user message
-  const initialUserMessage = `The player is traveling alone. They see a village in the distance that seems intact but shows signs of conflict. The player moves towards the village.`;
-
-  const messages: Message[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: initialUserMessage },
-  ];
-
-  // Call AI
-  let aiResponseText: string;
-  try {
-    aiResponseText = await generateStoryResponse(messages);
-  } catch (err) {
-    console.error("AI call failed:", err);
-    return { error: "AI call failed" };
-  }
-
-  // Parse AI JSON response
-  let aiResponse: StoryRecord;
-  try {
-    aiResponse = JSON.parse(aiResponseText);
-  } catch (err) {
-    console.error("Failed to parse AI response JSON:", err);
-    return { error: "AI response parsing failed" };
-  }
-
-  // Build initial progress entry
-  const initialProgress: Progress = {
-    entries: [{ ...aiResponse, user_input: null }],
-  };
-
-  // Check if storyState exists
-  let storyState = await prisma.storyState.findUnique({
-    where: { characterId },
-  });
-
-  if (!storyState) {
-    // Create new storyState with AI response
-    storyState = await prisma.storyState.create({
+    await prisma.character.update({
+      where: { id: characterId },
       data: {
-        characterId,
-        progress: initialProgress as any,
-        lastResponse: aiResponse,
+        currentStats: validatedStats,
       },
     });
-  } else {
-    // Or update existing storyState (optional, if re-start allowed)
-    storyState = await prisma.storyState.update({
-      where: { characterId },
+  }
+
+  // Update inventory
+  if (response.inventory_changes && response.inventory_changes.length > 0) {
+    for (const change of response.inventory_changes) {
+      if (change.quantity > 0) {
+        // Add item
+        await prisma.characterItem.create({
+          data: {
+            characterId,
+            type: change.type,
+            name: change.name,
+            description: change.description || "",
+            stats: change.stats,
+            quantity: change.quantity,
+            equipped: false,
+          },
+        });
+      } else if (change.quantity < 0) {
+        // Remove/consume item
+        const existingItem = await prisma.characterItem.findFirst({
+          where: {
+            characterId,
+            type: change.type,
+          },
+        });
+
+        if (existingItem) {
+          const newQuantity = existingItem.quantity + change.quantity;
+
+          if (newQuantity <= 0) {
+            // Delete item
+            await prisma.characterItem.delete({
+              where: { id: existingItem.id },
+            });
+          } else {
+            // Update quantity
+            await prisma.characterItem.update({
+              where: { id: existingItem.id },
+              data: { quantity: newQuantity },
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Update currency
+  if (response.currency_changes) {
+    const newGold = currentGold + (response.currency_changes.gold || 0);
+    const newSilver = currentSilver + (response.currency_changes.silver || 0);
+    const newCopper = currentCopper + (response.currency_changes.copper || 0);
+
+    const validatedCurrency = validateCurrency({
+      gold: newGold,
+      silver: newSilver,
+      copper: newCopper,
+    });
+
+    await prisma.character.update({
+      where: { id: characterId },
       data: {
-        progress: initialProgress as any,
-        lastResponse: aiResponse,
+        goldCoins: validatedCurrency.gold,
+        silverCoins: validatedCurrency.silver,
+        copperCoins: validatedCurrency.copper,
       },
     });
   }
 
-  // Return full storyState
-  return { success: true, storyState };
-}
-
-// Continue story
-export async function continueStory(characterId: string, userInput: string) {
-  const user = await requireAuth();
-
-  // Verify ownership
-  const character = await prisma.character.findFirst({
-    where: { id: characterId, userId: user.id },
-  });
-  if (!character) return { error: "Character not found" };
-
-  // Load current storyState
-  const storyState = await prisma.storyState.findUnique({
-    where: { characterId },
-  });
-  if (!storyState) return { error: "StoryState not found" };
-
-  const progress: Progress = storyState.progress as Progress;
-  const lastResponse: StoryRecord = storyState.lastResponse as StoryRecord;
-
-  // Append last user input to progress
-  const newEntry: StoryRecord = { ...lastResponse, user_input: userInput };
-  const newProgressEntries = [...progress.entries, newEntry];
-
-  // Prepare messages for LLM (last 5 entries for context)
-  const recentEntries = getRecentEntries({ entries: newProgressEntries }, 5);
-
-  const messages: Message[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: JSON.stringify(recentEntries) },
-  ];
-
-  // Call AI
-  let aiResponseText: string;
-  try {
-    aiResponseText = await generateStoryResponse(messages);
-    console.log(aiResponseText);
-  } catch (err) {
-    console.error("AI call failed:", err);
-    return { error: "AI call failed" };
+  // Update skills
+  if (response.skills_used && response.skills_used.length > 0) {
+    await updateMultipleSkills(characterId, response.skills_used);
   }
-
-  // Parse AI JSON response
-  let aiResponse: StoryRecord;
-  try {
-    aiResponse = JSON.parse(aiResponseText);
-  } catch (err) {
-    console.error("Failed to parse AI response JSON:", err);
-    return { error: "AI response parsing failed" };
-  }
-
-  // Update progress and lastResponse
-  const updatedProgress: Progress = {
-    entries: [...newProgressEntries, { ...aiResponse, user_input: null }],
-  };
-
-  const updatedStoryState = await prisma.storyState.update({
-    where: { characterId },
-    data: {
-      progress: updatedProgress,
-      lastResponse: aiResponse,
-    },
-  });
-
-  return { success: true, lastResponse: aiResponse };
 }

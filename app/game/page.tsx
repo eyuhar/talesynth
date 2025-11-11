@@ -1,19 +1,14 @@
 import { requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import ClientStoryUI from "./ClientStoryUI";
+import ClientStoryUI from "./[id]/ClientStoryUI";
 
-export default async function GamePage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function GamePage() {
   const user = await requireAuth();
-  const { id } = await params;
 
   return (
     <div className="p-8">
-      <ClientStoryUI storyId={id} />
+      <ClientStoryUI />
     </div>
   );
 }
