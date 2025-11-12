@@ -59,3 +59,47 @@ export async function generateStoryResponse(context: any): Promise<string> {
 
   return data.choices[0].message.content;
 }
+
+/**
+ * STREAMING VERSION
+ * returns ReadableStream
+ */
+export async function generateStoryResponseStream(
+  context: any
+): Promise<ReadableStream<Uint8Array>> {
+  const systemPrompt = buildSystemPrompt();
+  const userMessage = JSON.stringify(context, null, 2);
+
+  const messages: Message[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage },
+  ];
+
+  const response = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "X-Title": "TaleSynth",
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_MODEL,
+        messages,
+        temperature: 0.6,
+        max_tokens: 4500,
+        presence_penalty: 0.3,
+        frequency_penalty: 0.3,
+        stream: true,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`OpenRouter API error: ${error}`);
+  }
+
+  return response.body!;
+}

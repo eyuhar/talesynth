@@ -1,23 +1,23 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import {
-  getLastResponse,
-  startStory,
-  continueStory,
-} from "@/app/actions/story";
+import { getLastResponse, startStory } from "@/app/actions/story";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { prisma } from "@/lib/prisma";
 import { getCharacter } from "@/app/actions/character";
 
 export default function ClientStoryUI({ storyId }: { storyId?: string }) {
   const [lr, setLr] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [streamingText, setStreamingText] = useState("");
   const [currentStoryId, setCurrentStoryId] = useState<string | null>(
     storyId || null
   );
   const [character, setCharacter] = useState<any>(null);
+
+  const [characterName, setCharacterName] = useState("Roderick");
+  const [gender, setGender] = useState<"male" | "female" | "other">("male");
 
   useEffect(() => {
     async function fetchCharacter() {
@@ -30,10 +30,6 @@ export default function ClientStoryUI({ storyId }: { storyId?: string }) {
     }
     fetchCharacter();
   }, [currentStoryId]);
-
-  // Character creation form
-  const [characterName, setCharacterName] = useState("Roderick");
-  const [gender, setGender] = useState<"male" | "female" | "other">("male");
 
   async function refresh(lastResponse?: any) {
     if (lastResponse) {
@@ -63,19 +59,93 @@ export default function ClientStoryUI({ storyId }: { storyId?: string }) {
     setLoading(false);
   }
 
-  async function handleChoice(choiceText: string) {
+  async function handleChoiceWithStreaming(choiceText: string) {
     if (!currentStoryId) return;
 
+    setStreaming(true);
+    setStreamingText("");
     setLoading(true);
-    const res = await continueStory(currentStoryId, choiceText);
 
-    if (res.success) {
-      await refresh(res.lastResponse);
-    } else {
-      console.error("Failed to continue story:", res.error);
+    try {
+      const response = await fetch("/api/story/continue-stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storyId: currentStoryId,
+          userInput: choiceText,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Stream failed");
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) throw new Error("No reader available");
+
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") continue;
+
+            try {
+              const parsed = JSON.parse(data);
+              const content = parsed.choices[0]?.delta?.content;
+
+              if (content) {
+                buffer += content;
+                console.log("Buffer so far:", buffer);
+
+                // extract only story_text for display
+                const displayText = extractStoryText(buffer);
+                console.log("Extracted story_text:", displayText);
+                if (displayText) {
+                  setStreamingText(displayText);
+                }
+              }
+            } catch (e) {
+              // Ignore
+            }
+          }
+        }
+      }
+
+      // Parse final
+      try {
+        const cleanBuffer = buffer
+          .replace(/```json\n?/g, "")
+          .replace(/```\n?/g, "")
+          .trim();
+
+        const finalResponse = JSON.parse(cleanBuffer);
+        setLr(finalResponse);
+      } catch (e) {
+        console.error("Parse error:", e);
+      }
+
+      const charData = await getCharacter(currentStoryId);
+      if (charData && charData.character) {
+        setCharacter(charData.character);
+      }
+
+      await refresh();
+    } catch (error) {
+      console.error("Streaming error:", error);
+      alert("Failed to continue story. Please try again.");
+    } finally {
+      setStreaming(false);
+      setLoading(false);
+      setStreamingText("");
     }
-
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -146,16 +216,15 @@ export default function ClientStoryUI({ storyId }: { storyId?: string }) {
   // Story Screen
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
-      {/* Stats Bar */}
       <div className="bg-slate-800 p-4 rounded-lg flex gap-6 text-sm">
         <div>
           <span className="text-background">HP:</span>{" "}
           <span className="text-red-400 font-bold">
-            {character.currentStats.hp}
+            {character?.currentStats?.hp || 0}
           </span>
         </div>
 
-        {lr.currency_changes && (
+        {character && (
           <div>
             <span className="text-background">Gold:</span>{" "}
             <span className="text-yellow-400">{character.goldCoins}</span>{" "}
@@ -173,7 +242,6 @@ export default function ClientStoryUI({ storyId }: { storyId?: string }) {
         )}
       </div>
 
-      {/* Combat Info */}
       {lr.enemies && lr.enemies.length > 0 && (
         <div className="bg-red-950 border border-red-800 p-4 rounded-lg space-y-2">
           <h3 className="font-bold text-red-400">Enemies:</h3>
@@ -195,14 +263,35 @@ export default function ClientStoryUI({ storyId }: { storyId?: string }) {
         </div>
       )}
 
-      {/* Story Text */}
-      <div className="bg-slate-300 p-6 rounded-lg">
+      <div className="bg-slate-300 p-6 rounded-lg min-h-[200px]">
         <p className="whitespace-pre-wrap text-base leading-relaxed">
-          {lr.story_text}
+          {streaming ? streamingText : lr.story_text}
         </p>
+
+        {streaming && (
+          <div className="mt-4 flex items-center gap-2 text-sm text-slate-500">
+            <div className="animate-pulse">✍️ Writing</div>
+            <div className="flex gap-1">
+              <span className="animate-bounce" style={{ animationDelay: "0s" }}>
+                .
+              </span>
+              <span
+                className="animate-bounce"
+                style={{ animationDelay: "0.2s" }}
+              >
+                .
+              </span>
+              <span
+                className="animate-bounce"
+                style={{ animationDelay: "0.4s" }}
+              >
+                .
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Items Gained/Lost */}
       {lr.inventory_changes && lr.inventory_changes.length > 0 && (
         <div className="bg-blue-950 border border-blue-800 p-4 rounded-lg">
           <h3 className="font-bold text-blue-400 mb-2">Inventory Changes:</h3>
@@ -217,7 +306,6 @@ export default function ClientStoryUI({ storyId }: { storyId?: string }) {
         </div>
       )}
 
-      {/* Skills Used */}
       {lr.skills_used && lr.skills_used.length > 0 && (
         <div className="bg-purple-950 border border-purple-800 p-4 rounded-lg">
           <h3 className="font-bold text-purple-400 mb-2">Skills Used:</h3>
@@ -229,27 +317,41 @@ export default function ClientStoryUI({ storyId }: { storyId?: string }) {
         </div>
       )}
 
-      {/* Choices */}
       <div className="space-y-3">
-        {lr.choices.map((choice: any) => (
-          <Button
-            key={choice.id}
-            variant="outline"
-            onClick={() => handleChoice(choice.text)}
-            disabled={loading}
-            className="w-full text-left justify-start h-auto py-3 px-4"
-          >
-            {choice.text}
-          </Button>
-        ))}
+        {lr.choices &&
+          lr.choices.map((choice: any) => (
+            <Button
+              key={choice.id}
+              variant="outline"
+              onClick={() => handleChoiceWithStreaming(choice.text)}
+              disabled={loading}
+              className="w-full text-left justify-start h-auto py-3 px-4"
+            >
+              {choice.text}
+            </Button>
+          ))}
       </div>
 
-      {/* Loading Indicator */}
-      {loading && (
+      {loading && !streaming && (
         <div className="text-center text-slate-400 text-sm">
-          Loading next part of the story...
+          Preparing story...
         </div>
       )}
     </div>
   );
+}
+
+// Helper Function
+function extractStoryText(buffer: string): string {
+  const match = buffer.match(/"story_text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+
+  if (match && match[1]) {
+    return match[1]
+      .replace(/\\n/g, "\n")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\")
+      .replace(/\\t/g, "\t");
+  }
+
+  return "";
 }
